@@ -125,7 +125,9 @@ void main(void)
 	init_joystick_gpio(&sw3, &button_cb_data_3);
 	init_joystick_gpio(&sw4, &button_cb_data_4);
 
-	modem = DEVICE_DT_GET(DT_NODELABEL(quectel_bg96));
+	/* IOTEMBSYS: Create the instance of the modem and set the modem var. */
+	// modem = <some device tree macro>
+
 	if (!device_is_ready(modem)) {
 		LOG_ERR("Modem not ready");
 		return;

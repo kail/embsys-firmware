@@ -103,14 +103,13 @@
 
 	/* QUECTEL BG96 */
 	/* IOTEMBSYS: Add BG96 device node */
+	/*
 	quectel_bg96: quectel_bg96 {
 		compatible = "quectel,bg96";
-		mdm-power-gpios = <&gpiod 3 GPIO_ACTIVE_LOW>;
-		mdm-reset-gpios = <&gpiob 2 GPIO_ACTIVE_LOW>;
-		mdm-dtr-gpios = <&gpioa 0 GPIO_ACTIVE_LOW>;
-		mdm-sim-select-gpios = <&gpioc 2 GPIO_ACTIVE_LOW>, <&gpioi 3 GPIO_ACTIVE_LOW>;
+		<add gpios here>
 		status = "okay";
 	};
+	*/
 };
 
 /* IOTEMBSYS: Add UART node */
