@@ -3,7 +3,8 @@
 
 #include <zephyr/net/net_ip.h>
 #include <zephyr/net/socket.h>
-#include <zephyr/net/http/client.h>
+
+/* IOTEMBSYS: Add http header */
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
@@ -19,7 +20,6 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
 
-/* IOTEMBSYS: Add joystick key declarations. */
 #define SW0_NODE	DT_ALIAS(sw0)
 #define SW1_NODE	DT_ALIAS(sw1)
 #define SW2_NODE	DT_ALIAS(sw2)
@@ -50,21 +50,14 @@ static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 /* The amount of time between GPIO blinking. */
 static uint32_t blink_interval_ = DEFAULT_SLEEP_TIME_MS;
 
-/* IOTEMBSYS: Add synchronization to unblock the sender task */
 static struct k_event unblock_sender_;
 
-/* IOTEMBSYS: Add synchronization to pass the socket to the receiver task */
-struct k_fifo socket_queue_;
-
-/* IOTEMBSYS: Create a buffer for receiving HTTP responses */
-#define MAX_RECV_BUF_LEN 512
-static uint8_t recv_buf_[MAX_RECV_BUF_LEN];
+/* IOTEMBSYS: Declare a buffer for receiving HTTP responses */
 
 static void change_blink_interval(uint32_t new_interval_ms) {
 	blink_interval_ = new_interval_ms;
 }
 
-/* IOTEMBSYS: Add joystick press handler. Metaphorical bonus points for debouncing. */
 static void button_pressed(const struct device *dev, struct gpio_callback *cb,
 		    uint32_t pins) {
 	printk("Button %d pressed at %" PRIu32 "\n", pins, k_cycle_get_32());
@@ -120,97 +113,11 @@ static int init_joystick_gpio(const struct gpio_dt_spec* button, struct gpio_cal
 	return ret;
 }
 
-static int setup_socket(sa_family_t family, const char *server, int port,
-			int *sock, struct sockaddr *addr, socklen_t addr_len)
-{
-	const char *family_str = family == AF_INET ? "IPv4" : "IPv6";
-	int ret = 0;
-
-	memset(addr, 0, addr_len);
-
-	net_sin(addr)->sin_family = AF_INET;
-	net_sin(addr)->sin_port = htons(port);
-	inet_pton(family, server, &net_sin(addr)->sin_addr);
-
-	*sock = socket(family, SOCK_STREAM, IPPROTO_TCP);
-
-	if (*sock < 0) {
-		LOG_ERR("Failed to create %s HTTP socket (%d)", family_str,
-			-errno);
-	}
-
-	return ret;
-}
-
-static int connect_socket(sa_family_t family, const char *server, int port,
-			  int *sock, struct sockaddr *addr, socklen_t addr_len)
-{
-	int ret;
-
-	ret = setup_socket(family, server, port, sock, addr, addr_len);
-	if (ret < 0 || *sock < 0) {
-		return -1;
-	}
-
-	ret = connect(*sock, addr, addr_len);
-	if (ret < 0) {
-		LOG_ERR("Cannot connect to %s remote (%d)",
-			family == AF_INET ? "IPv4" : "IPv6",
-			-errno);
-		ret = -errno;
-	}
-
-	return ret;
-}
-
-struct socket_queue_item {
-	void* fifo_reserved;
-	int sock;
-};
 
 /* IOTEMBSYS: Create a HTTP response handler/callback. */
-static void http_response_cb(struct http_response *rsp,
-			enum http_final_call final_data,
-			void *user_data)
-{
-	if (final_data == HTTP_DATA_MORE) {
-		LOG_INF("Partial data received (%zd bytes)", rsp->data_len);
-	} else if (final_data == HTTP_DATA_FINAL) {
-		LOG_INF("All the data received (%zd bytes)", rsp->data_len);
-		
-		// This assumes the response fits in a single buffer.
-		recv_buf_[rsp->data_len] = '\0';
-	}
 
-	LOG_INF("Response to %s", (const char *)user_data);
-	LOG_INF("Response status %s", rsp->http_status);
-}
-
-int http_payload_cb(int sock, struct http_request *req, void *user_data) {
-	const char *content[] = {
-		"foobar",
-		"chunked",
-		"last"
-	};
-	char tmp[64];
-	int i, pos = 0;
-
-	for (i = 0; i < ARRAY_SIZE(content); i++) {
-		pos += snprintk(tmp + pos, sizeof(tmp) - pos,
-				"%x\r\n%s\r\n",
-				(unsigned int)strlen(content[i]),
-				content[i]);
-	}
-
-	pos += snprintk(tmp + pos, sizeof(tmp) - pos, "0\r\n\r\n");
-
-	(void)send(sock, tmp, pos, 0);
-
-	return pos;
-}
-
+// Some helpful macros
 #define USE_EC2_SERVER 0
-
 #define TCPBIN_IP "45.79.112.203"
 #define HTTPBIN_IP "100.26.90.23"
 #define EC2_IP "44.203.155.243"
@@ -218,18 +125,8 @@ int http_payload_cb(int sock, struct http_request *req, void *user_data) {
 #define HTTP_PORT 80
 #define IS_POST_REQ 1
 
-#if !USE_EC2_SERVER
-	static const char kEchoServerIP[] = HTTPBIN_IP;
-#else
-	static const char kEchoServerIP[] = EC2_IP;
-#endif
-
-/* IOTEMBSYS: Implement the HTTP client functionality */
+// Feel free to use your own thread implementation from the previous assignment.
 void http_client_thread(void* p1, void* p2, void* p3) {
-	int sock;
-	struct sockaddr_in addr4;
-	const int32_t timeout = 5 * MSEC_PER_SEC;
-
 	k_event_init(&unblock_sender_);
 
 	while (true) {
@@ -241,45 +138,7 @@ void http_client_thread(void* p1, void* p2, void* p3) {
 			continue;
 		}
 
-		if (connect_socket(AF_INET, kEchoServerIP, HTTP_PORT,  &sock, (struct sockaddr *)&addr4, sizeof(addr4)) < 0) {
-			LOG_ERR("Connect failed");
-			continue;
-		}
-
-		struct http_request req;
-
-		memset(&req, 0, sizeof(req));
-		memset(recv_buf_, 0, sizeof(recv_buf_));
-
-#if !IS_POST_REQ
-		req.method = HTTP_GET;
-		req.url = "/get";
-#else
-		req.method = HTTP_POST;
-		req.url = "/post";
-		req.payload_cb = http_payload_cb;
-		// This must match the payload-generating function!
-		req.payload_len = 37;
-#endif
-		req.host = "httpbin.org";
-		req.protocol = "HTTP/1.1";
-		req.response = http_response_cb;
-		req.recv_buf = recv_buf_;
-		req.recv_buf_len = sizeof(recv_buf_);
-
-		// This request is synchronous and blocks the thread.
-		printk("Sending HTTP request");
-		int ret = http_client_req(sock, &req, timeout, "IPv4 GET");
-		if (ret > 0) {
-			printk("HTTP request sent %d bytes", ret);
-		} else {
-			printk("HTTP request failed: %d", ret);
-		}
-
-		printk("Closing socket");
-		close(sock);
-
-		printk("HTTP response: %s", recv_buf_);
+		/* IOTEMBSYS: Implement the HTTP client functionality */
 	}
 }
 K_THREAD_DEFINE(http_client_tid, 4000 /*stack size*/,
@@ -300,7 +159,6 @@ void main(void)
 		return;
 	}
 
-	/* IOTEMBSYS: Configure joystick GPIOs. */
 	init_joystick_gpio(&sw0, &button_cb_data_0);
 	init_joystick_gpio(&sw1, &button_cb_data_1);
 	init_joystick_gpio(&sw2, &button_cb_data_2);
@@ -315,7 +173,6 @@ void main(void)
 
 	while (1) {
 		ret = gpio_pin_toggle_dt(&led);
-		/* IOTEMBSYS: Print GPIO state to console. */
 		if (ret < 0) {
 			return;
 		}
